@@ -201,28 +201,35 @@ async function obfuscateCode(code) {
 
         if (stdout.includes('FATAL_ERROR') || !stdout.includes('SUCCESS')) {
             await cleanup(inp, out, cfg);
-            const log = (stdout || stderr).substring(0, 1200);
+            const log = (stdout || stderr || '').substring(0, 1200);
 
-            // Detect Luau/syntax errors — show clean message in chat
-            // Only true parse errors - NOT generic "parsing" mentions
-            const isParseError = log.includes('Parsing Error:') 
-                || (log.includes('unexpected symbol') && !log.includes('SUCCESS'))
-                || log.includes("'=' expected near")
-                || log.includes("'end' expected")
-                || log.includes("'<eof>' expected near")
-                || log.includes("unfinished string")
-                || log.includes("unfinished long comment");
-
-            if (isParseError) {
-                return { success: false, error: '❌ **Syntax Error** — your script contains Luau syntax not supported in Lua 5.1.\n\n**Common causes:**\n> • `+=`, `-=`, `*=`, `//=` compound operators\n> • `continue` keyword\n> • Type annotations like `: string`, `: number`\n> • `task.wait()` or other Roblox-specific globals\n\nConvert your script to **pure Lua 5.1** and try again.' };
+            // Timeout / killed process — no output at all
+            if (!log || log.trim().length === 0) {
+                return { success: false, error: '⚠️ **Script too large or complex.** Try a smaller script or simplify the code.' };
             }
 
-            // FATAL or unknown error — DM owner silently, return generic message in chat
+            // Only show syntax error if the log explicitly contains a parse error token
+            // NOT triggered by empty output or unrelated errors
+            const hasParseToken = log.includes('Parsing Error:')
+                || log.includes("unexpected symbol near")
+                || log.includes("'<eof>' expected near")
+                || log.includes("unfinished string near");
+
+            if (hasParseToken) {
+                // Try to extract just the error line
+                const errorLine = log.split('\n').find(l =>
+                    l.includes('Parsing Error') || l.includes('unexpected symbol') ||
+                    l.includes("'<eof>'") || l.includes('unfinished')
+                ) || '';
+                return { success: false, error: '❌ **Syntax Error**\n> ' + errorLine.replace('FATAL_ERROR:', '').trim() };
+            }
+
+            // All other errors — DM owner with full log, show generic in chat
             try {
                 const owner = await client.users.fetch('1168949298784895116');
                 await owner.send({ embeds: [{ color: 0xff4444, title: '❌ FATAL Error', description: '```\n' + log.slice(0, 1800) + '\n```', timestamp: new Date().toISOString() }] });
             } catch {}
-            return { success: false, error: '❌ **Obfuscation failed.** An internal error occurred. The developer has been notified.' };
+            return { success: false, error: '❌ **Obfuscation failed.** An internal error occurred.' };
         }
 
         const obfuscated = await fs.readFile(out, 'utf8');
