@@ -63,6 +63,25 @@ function downloadFile(url, hops) {
     });
 }
 
+// ── Luau → Lua 5.1 converter ─────────────────────────────────────────────────
+function luauToLua51(code) {
+    // Remove type annotations e.g.: local x: string = ...
+    code = code.replace(/([,(\s])(\w+)\s*:\s*[A-Za-z][A-Za-z0-9_.?<>, |]*/g, '$1$2');
+    // Remove export type / type aliases
+    code = code.replace(/^[ \t]*export\s+type\b.+$/gm, '');
+    code = code.replace(/^[ \t]*type\s+\w[\w]*\s*=[^\n]+/gm, '');
+    // Compound assignment: +=  -=  *=  /=  %=  ^=  ..=
+    code = code.replace(/(\w[\w.\[\]"']*)\s*\+=(\s*)(.+)/g, '$1 = $1 + ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*-=(\s*)(.+)/g, '$1 = $1 - ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*\*=(\s*)(.+)/g, '$1 = $1 * ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*\/=(\s*)(.+)/g, '$1 = $1 / ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*%=(\s*)(.+)/g, '$1 = $1 % ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*\^=(\s*)(.+)/g, '$1 = $1 ^ ($3)');
+    code = code.replace(/(\w[\w.\[\]"']*)\s*\.\.\.=(\s*)(.+)/g, '$1 = $1 .. ($3)');
+    // continue → do end
+    code = code.replace(/\bcontinue\b/g, 'do end');
+    return code;
+}
 // ── Obfuscation ───────────────────────────────────────────────────────────────
 async function obfuscateCode(code) {
     const ts  = Date.now();
@@ -71,6 +90,10 @@ async function obfuscateCode(code) {
     const cfg = path.join(TEMP_DIR, `c_${ts}.lua`);
 
     try {
+        // ── Luau → Lua 5.1 preprocessing ──────────────────────────────────────
+        // Converts Luau/Roblox syntax to Lua 5.1 before obfuscation
+        code = luauToLua51(code);
+        // ────────────────────────────────────────────────────────────────────
         await fs.writeFile(inp, code, 'utf8');
 
         const pp = process.env.RAILWAY_ENVIRONMENT
@@ -181,10 +204,14 @@ async function obfuscateCode(code) {
             const log = (stdout || stderr).substring(0, 1200);
 
             // Detect Luau/syntax errors — show clean message in chat
-            const isParseError = log.includes('Parsing Error') || log.includes('unexpected symbol')
-                || log.includes('parsing') || log.includes('parse')
-                || log.includes("'=' expected") || log.includes("'end' expected")
-                || log.includes("'<eof>' expected") || log.includes("unfinished");
+            // Only true parse errors - NOT generic "parsing" mentions
+            const isParseError = log.includes('Parsing Error:') 
+                || (log.includes('unexpected symbol') && !log.includes('SUCCESS'))
+                || log.includes("'=' expected near")
+                || log.includes("'end' expected")
+                || log.includes("'<eof>' expected near")
+                || log.includes("unfinished string")
+                || log.includes("unfinished long comment");
 
             if (isParseError) {
                 return { success: false, error: '❌ **Syntax Error** — your script contains Luau syntax not supported in Lua 5.1.\n\n**Common causes:**\n> • `+=`, `-=`, `*=`, `//=` compound operators\n> • `continue` keyword\n> • Type annotations like `: string`, `: number`\n> • `task.wait()` or other Roblox-specific globals\n\nConvert your script to **pure Lua 5.1** and try again.' };
