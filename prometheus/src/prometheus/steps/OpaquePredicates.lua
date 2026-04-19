@@ -5,25 +5,103 @@ local visitast = require("prometheus.visitast");
 local OpaquePredicates = Step:extend();
 OpaquePredicates.Name = "Opaque Predicates";
 OpaquePredicates.SettingsDescriptor = {
-    Treshold = { type="number", default=0.4 }
+    Treshold = { type="number", default=0.2 }
 };
 function OpaquePredicates:init(settings)
     settings = settings or {}
-    self.Treshold = settings.Treshold or 0.4
+    self.Treshold = settings.Treshold or 0.2
 end
 
--- Estratégia: usar pcall para definir uma variável local
--- O deobfuscador NÃO rastreia o estado de variáveis modificadas dentro de pcall
--- então não consegue saber se _r é true ou false depois do pcall
---
--- Estrutura gerada:
---   local _r = false
---   pcall(function() _r = not not rawget end)
---   if _r then [REAL CODE] else [DEAD CODE] end
+-- Mix of arithmetic (can't be folded away) and select/rawequal (runtime)
+local function alwaysTrue(scope)
+    local s = math.random(1, 6)
+    local a = math.random(2, 50)
+    local b = math.random(2, 50)
+    if s == 1 then
+        -- select("#", ...) always returns count >= 0  →  select("#") >= 0
+        return Ast.NotEqualsExpression(
+            Ast.FunctionCallExpression(
+                Ast.VariableExpression(scope:resolveGlobal("select")),
+                {Ast.StringExpression("#")}
+            ),
+            Ast.NumberExpression(-1)
+        )
+    elseif s == 2 then
+        -- type(rawget) == "function"
+        return Ast.EqualsExpression(
+            Ast.FunctionCallExpression(
+                Ast.VariableExpression(scope:resolveGlobal("type")),
+                {Ast.VariableExpression(scope:resolveGlobal("rawget"))}
+            ),
+            Ast.StringExpression("function")
+        )
+    elseif s == 3 then
+        -- rawequal(type, type) → true
+        return Ast.FunctionCallExpression(
+            Ast.VariableExpression(scope:resolveGlobal("rawequal")),
+            {
+                Ast.VariableExpression(scope:resolveGlobal("type")),
+                Ast.VariableExpression(scope:resolveGlobal("type"))
+            }
+        )
+    elseif s == 4 then
+        -- (a + b) - b == a
+        return Ast.EqualsExpression(
+            Ast.SubExpression(
+                Ast.AddExpression(Ast.NumberExpression(a), Ast.NumberExpression(b)),
+                Ast.NumberExpression(b)
+            ),
+            Ast.NumberExpression(a)
+        )
+    elseif s == 5 then
+        -- type(pcall) ~= "table"
+        return Ast.NotEqualsExpression(
+            Ast.FunctionCallExpression(
+                Ast.VariableExpression(scope:resolveGlobal("type")),
+                {Ast.VariableExpression(scope:resolveGlobal("pcall"))}
+            ),
+            Ast.StringExpression("table")
+        )
+    else
+        -- a * 1 == a
+        return Ast.EqualsExpression(
+            Ast.MulExpression(Ast.NumberExpression(a), Ast.NumberExpression(1)),
+            Ast.NumberExpression(a)
+        )
+    end
+end
+
+local function alwaysFalse(scope)
+    local a = math.random(2, 50)
+    local s = math.random(1, 3)
+    if s == 1 then
+        -- rawequal(rawget, rawset) → false
+        return Ast.FunctionCallExpression(
+            Ast.VariableExpression(scope:resolveGlobal("rawequal")),
+            {
+                Ast.VariableExpression(scope:resolveGlobal("rawget")),
+                Ast.VariableExpression(scope:resolveGlobal("rawset"))
+            }
+        )
+    elseif s == 2 then
+        -- type(pcall) == "table" → false
+        return Ast.EqualsExpression(
+            Ast.FunctionCallExpression(
+                Ast.VariableExpression(scope:resolveGlobal("type")),
+                {Ast.VariableExpression(scope:resolveGlobal("pcall"))}
+            ),
+            Ast.StringExpression("table")
+        )
+    else
+        return Ast.EqualsExpression(
+            Ast.NumberExpression(a),
+            Ast.NumberExpression(a + 1)
+        )
+    end
+end
 
 function OpaquePredicates:apply(ast, pipeline)
-    local modifications = {}
-
+    local mods = {}
     visitast(ast, nil, function(node, data)
         if node.kind == Ast.AstKind.Block
         and #node.statements > 0
@@ -34,86 +112,22 @@ function OpaquePredicates:apply(ast, pipeline)
                 local stmt = node.statements[idx]
                 if stmt.kind == Ast.AstKind.ReturnStatement
                 or stmt.kind == Ast.AstKind.BreakStatement then return end
-                table.insert(modifications, {
-                    blockNode = node, index = idx,
-                    statement = stmt, scope = data.scope
-                })
+                table.insert(mods, {node=node, idx=idx, stmt=stmt, scope=data.scope})
             end
         end
     end)
 
-    for _, mod in ipairs(modifications) do
-        local scope = mod.scope
-        local s = math.random(1, 4)
-
-        -- Variável local que recebe valor dentro de pcall
-        local rVar = scope:addVariable()
-
-        -- pcall closure scope
-        local pcScope = Scope:new(scope)
-        pcScope:addReferenceToHigherScope(scope, rVar)
-
-        local assignVal
-        if s == 1 then
-            -- _r = not not rawget  (rawget é truthy, logo true)
-            assignVal = Ast.NotExpression(
-                Ast.NotExpression(Ast.VariableExpression(scope:resolveGlobal("rawget")))
-            )
-        elseif s == 2 then
-            -- _r = not not rawset
-            assignVal = Ast.NotExpression(
-                Ast.NotExpression(Ast.VariableExpression(scope:resolveGlobal("rawset")))
-            )
-        elseif s == 3 then
-            -- _r = not not pcall
-            assignVal = Ast.NotExpression(
-                Ast.NotExpression(Ast.VariableExpression(scope:resolveGlobal("pcall")))
-            )
-        else
-            -- _r = not not setmetatable
-            assignVal = Ast.NotExpression(
-                Ast.NotExpression(Ast.VariableExpression(scope:resolveGlobal("setmetatable")))
-            )
-        end
-
-        -- pcall(function() _r = <val> end)
-        local pcallFn = Ast.FunctionLiteralExpression({},
-            Ast.Block({
-                Ast.AssignmentStatement(
-                    {Ast.AssignmentVariable(scope, rVar)},
-                    {assignVal}
-                )
-            }, pcScope)
-        )
-        local pcallStmt = Ast.FunctionCallStatement(
-            Ast.VariableExpression(scope:resolveGlobal("pcall")),
-            {pcallFn}
-        )
-
-        -- real block + dead block
-        local realBlock = Ast.Block({mod.statement}, scope)
-        local deadScope = Scope:new(scope)
+    for _, m in ipairs(mods) do
+        local ok, cond = pcall(alwaysTrue, m.scope)
+        if not ok then cond = Ast.BooleanExpression(true) end
+        local realBlock = Ast.Block({m.stmt}, m.scope)
         local deadBlock = Ast.Block({
-            Ast.AssignmentStatement(
-                {Ast.AssignmentVariable(scope:resolveGlobal("_x_"..tostring(math.random(1e5,9e5))))},
+            Ast.LocalVariableDeclaration(m.scope,
+                {m.scope:addVariable()},
                 {Ast.NumberExpression(math.random(1,9999))}
             )
-        }, deadScope)
-
-        -- local _r = false; pcall(...); if _r then real else dead end
-        local localDecl = Ast.LocalVariableDeclaration(
-            scope, {rVar}, {Ast.BooleanExpression(false)}
-        )
-        local ifStmt = Ast.IfStatement(
-            Ast.VariableExpression(scope, rVar),
-            realBlock, {}, deadBlock
-        )
-
-        -- Replace single statement with 3: local, pcall, if
-        local block = mod.blockNode
-        block.statements[mod.index] = ifStmt
-        table.insert(block.statements, mod.index, pcallStmt)
-        table.insert(block.statements, mod.index, localDecl)
+        }, m.scope)
+        m.node.statements[m.idx] = Ast.IfStatement(cond, realBlock, {}, deadBlock)
     end
 
     return ast
