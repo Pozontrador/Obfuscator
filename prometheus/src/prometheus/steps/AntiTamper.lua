@@ -250,6 +250,22 @@ function AntiTamper:apply(ast, pipeline)
                 end
             end
         end
+        -- [P] Anti-debug: sethook/gethook detection
+        local _dbgP = _E3["deb".."ug"]
+        if _ty3 and _ty3(_dbgP)=="table" then
+            local _ghP = _dbgP["get".."hook"]
+            local _shP = _dbgP["set".."hook"]
+            if _ty3(_ghP)=="function" and _ty3(_shP)=="function" then
+                local _hookP = _ghP()
+                if _hookP ~= nil then
+                    if _ty3(_er3)=="function" then _er3("",0) end
+                end
+                local _okP, _fnP, _maskP = _pc3(_ghP)
+                if _okP and _ty3(_maskP)=="string" and #_maskP > 0 then
+                    if _ty3(_er3)=="function" then _er3("",0) end
+                end
+            end
+        end
     end
     ]==]
 
@@ -442,20 +458,3 @@ function AntiTamper:apply(ast, pipeline)
 end
 
 return AntiTamper;
-        -- [P] Anti-debug: sethook/gethook
-        if _ty3 and _ty3(_dbg3)=="table" then
-            local _sh3 = _dbg3["set".."hook"]
-            local _gh3 = _dbg3["get".."hook"]
-            if _ty3(_sh3)=="function" and _ty3(_gh3)=="function" then
-                local _hook3 = _gh3()
-                if _hook3 ~= nil then
-                    if _ty3(_er3)=="function" then _er3("",0) end
-                end
-                local _okq, _hfn2, _hmask2 = _pc3(_gh3)
-                if _okq and _ty3(_hmask2)=="string" and #_hmask2 > 0 then
-                    if _ty3(_er3)=="function" then _er3("",0) end
-                end
-            end
-        end
-    end
-    
