@@ -121,8 +121,11 @@ function Compiler:compile(ast)
     -- Raw IDs are never visible in output; deobfuscators see only offset values
     self.blockIdOffset = math.random(100000, 8000000);
     -- Técnica 3: instruction pointer XOR mask (scrambles pos value in storage)
-    self.iMask = math.random(1, 65535);
-    self.uvKey = math.random(1, 250);
+    self.iMask  = math.random(1, 65535);
+    self.uvKey  = math.random(1, 250);
+    -- Second VM layer: multiplicative key for block ID scrambling
+    -- Must be odd to be invertible mod 2^24
+    self.vmKeyM = math.random(1, 8000) * 2 + 1;
 
     self.upvalVars = {};
     self.registerUsageStack = {};
@@ -341,7 +344,7 @@ function Compiler:compile(ast)
         Ast.ReturnStatement{
             Ast.FunctionCallExpression(Ast.FunctionCallExpression(Ast.VariableExpression(self.scope, self.createVarargClosureVar), {
                     (function()
-                        local sv = (self.startBlockId + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+                        local sv = ((self.startBlockId * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
                         local kv = math.random(1, 9999);
                         return Ast.AddExpression(Ast.NumberExpression(sv - kv), Ast.NumberExpression(kv));
                     end)();
@@ -687,7 +690,7 @@ function Compiler:emitContainerFuncBody()
     end);
 
     local function buildIfBlock(scope, id, lBlock, rBlock)
-        local emittedId = (id + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+        local emittedId = ((id * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
         return Ast.Block({
             Ast.IfStatement(Ast.LessThanExpression(self:pos(scope), Ast.NumberExpression(emittedId)), lBlock, {}, rBlock);
         }, scope);
@@ -986,7 +989,8 @@ function Compiler:setPos(scope, val)
         return Ast.AssignmentStatement({Ast.AssignmentVariable(self.containerFuncScope, self.posVar)}, {v});
     end
     scope:addReferenceToHigherScope(self.containerFuncScope, self.posVar);
-    local emittedVal = (val + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+    -- Two-layer scramble: multiply then add, different every build
+    local emittedVal = ((val * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
     local noise = math.random(1, 9999);
     local idExpr;
     if math.random(1, 2) == 1 then
