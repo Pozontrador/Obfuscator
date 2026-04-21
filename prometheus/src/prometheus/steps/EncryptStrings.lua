@@ -13,7 +13,7 @@ function EncryptStrings:init(settings)
     self.Treshold = settings.Treshold or 0.9
     -- 256-entry lookup table (IronBrew style)
     self.tbl = {}
-    for i = 0, 255 do self.tbl[i] = math.random(0, 127) end
+    for i = 0, 255 do self.tbl[i] = math.random(0, 255) end
 end
 
 function EncryptStrings:isImportant(str)
@@ -31,7 +31,7 @@ function EncryptStrings:apply(ast, pipeline)
         if math.random() > self.Treshold then return end
 
         local str = node.value
-        if #str == 0 or #str > 60 then return end
+        if #str == 0 or #str > 80 then return end
 
         -- Per-string key length (4-8 bytes from the 256-table)
         local keyLen = math.random(4, 8)

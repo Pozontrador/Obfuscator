@@ -125,7 +125,9 @@ function Compiler:compile(ast)
     self.uvKey  = math.random(1, 250);
     -- Second VM layer: multiplicative key for block ID scrambling
     -- Must be odd to be invertible mod 2^24
-    self.vmKeyM = math.random(1, 8000) * 2 + 1;
+    self.vmKeyM  = math.random(1, 8000) * 2 + 1;
+    -- Third layer: XOR mask applied after multiply+add
+    self.xorMask = math.random(1000, 16000000);
 
     self.upvalVars = {};
     self.registerUsageStack = {};
@@ -344,7 +346,8 @@ function Compiler:compile(ast)
         Ast.ReturnStatement{
             Ast.FunctionCallExpression(Ast.FunctionCallExpression(Ast.VariableExpression(self.scope, self.createVarargClosureVar), {
                     (function()
-                        local sv = ((self.startBlockId * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+                        local _svBase = ((self.startBlockId * (self.vmKeyM or 1)) + (self.blockIdOffset or 0)) % 16777216;
+                        local sv = (_svBase + (self.iMask or 0) + (self.xorMask or 0)) % 16777216;
                         local kv = math.random(1, 9999);
                         return Ast.AddExpression(Ast.NumberExpression(sv - kv), Ast.NumberExpression(kv));
                     end)();
@@ -690,7 +693,8 @@ function Compiler:emitContainerFuncBody()
     end);
 
     local function buildIfBlock(scope, id, lBlock, rBlock)
-        local emittedId = ((id * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+        local _emBase2 = ((id * (self.vmKeyM or 1)) + (self.blockIdOffset or 0)) % 16777216;
+        local emittedId = (_emBase2 + (self.iMask or 0) + (self.xorMask or 0)) % 16777216;
         return Ast.Block({
             Ast.IfStatement(Ast.LessThanExpression(self:pos(scope), Ast.NumberExpression(emittedId)), lBlock, {}, rBlock);
         }, scope);
@@ -990,7 +994,9 @@ function Compiler:setPos(scope, val)
     end
     scope:addReferenceToHigherScope(self.containerFuncScope, self.posVar);
     -- Two-layer scramble: multiply then add, different every build
-    local emittedVal = ((val * (self.vmKeyM or 1)) + (self.blockIdOffset or 0) + (self.iMask or 0)) % 16777216;
+    -- Three-layer ID scramble: multiply → add offset → add secondary mask
+    local _emBase = ((val * (self.vmKeyM or 1)) + (self.blockIdOffset or 0)) % 16777216;
+    local emittedVal = (_emBase + (self.iMask or 0) + (self.xorMask or 0)) % 16777216;
     local noise = math.random(1, 9999);
     local idExpr;
     if math.random(1, 2) == 1 then
