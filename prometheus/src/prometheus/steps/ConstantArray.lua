@@ -20,7 +20,16 @@ function ConstantArray:init(settings)
     self.offsetK1    = math.random(1, self.fixedOffset - 1)
     self.offsetK2    = self.fixedOffset - self.offsetK1
     -- Per-build additive cipher for integer constants
-    self.numKey      = math.random(100, 9999)
+    self.numKey      = math.random(10000, 9999999)  -- much larger keyspace
+    -- Per-build multiplicative index scrambler
+    -- stored_pos = (real_pos * mA + mB) % count — hides array structure
+    self.mA = math.random(3, 97) * 2 + 1
+    self.mB = math.random(10, 999)
+end
+
+function ConstantArray:scrambleIndex(i, n)
+    if n <= 0 then return i end
+    return ((i - 1) * self.mA + self.mB) % n + 1
 end
 
 function ConstantArray:createArray()
@@ -87,6 +96,8 @@ function ConstantArray:apply(ast, pipeline)
     self.constants    = {}
     self.lookup       = {}
     self.wrapperTable = self.rootScope:addVariable()
+    -- Pre-allocate decoderAlias so indexing() can use it from the start
+    self.decoderAlias = self.rootScope:addVariable()
 
     visitast(ast, nil, function(node, data)
         if math.random() <= self.Treshold then
@@ -119,9 +130,15 @@ function ConstantArray:apply(ast, pipeline)
     funcScope:addReferenceToHigherScope(self.rootScope, self.arrId)
     local arg = funcScope:addVariable()
 
+    -- Offset split into two parts, multiplied by 1 to obscure the simple addition
+    local _ok1 = self.offsetK1
+    local _ok2 = self.offsetK2
     local offsetExpr = Ast.AddExpression(
-        Ast.NumberExpression(self.offsetK1),
-        Ast.NumberExpression(self.offsetK2)
+        Ast.MulExpression(Ast.NumberExpression(_ok1), Ast.NumberExpression(1)),
+        Ast.AddExpression(
+            Ast.NumberExpression(_ok2 - 1),
+            Ast.NumberExpression(1)
+        )
     )
     -- Decoder: reads arr[arg-offset], then subtracts numKey if the value is a number
     -- function(arg)
@@ -163,21 +180,14 @@ function ConstantArray:apply(ast, pipeline)
         }, funcScope)
     )
 
-    -- Pre-load the decoder into a local alias for O(1) access
-    local decoderAlias = self.rootScope:addVariable()
-
+    -- Pre-load the decoder directly as a local function (no wrapper table fingerprint)
+    -- decoderAlias was pre-allocated above, just emit the declaration now
     table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(
-        self.rootScope, {decoderAlias}, {
-            Ast.IndexExpression(
-                Ast.VariableExpression(self.rootScope, self.wrapperTable),
-                Ast.NumberExpression(1)
-            )
-        }
+        self.rootScope, {self.decoderAlias}, {funcLiteral}
     ))
+    -- wrapperTable still declared for compatibility but empty
     table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(
-        self.rootScope, {self.wrapperTable}, {
-            Ast.TableConstructorExpression({Ast.TableEntry(funcLiteral)})
-        }
+        self.rootScope, {self.wrapperTable}, {Ast.TableConstructorExpression({})}
     ))
     table.insert(ast.body.statements, 1, Ast.LocalVariableDeclaration(
         self.rootScope, {self.arrId}, {self:createArray()}

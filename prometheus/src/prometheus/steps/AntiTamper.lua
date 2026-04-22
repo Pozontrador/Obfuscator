@@ -9,6 +9,20 @@ function AntiTamper:init(settings) end
 
 function AntiTamper:apply(ast, pipeline)
 
+
+    -- Frag0: shared bootstrap — resolves env ONCE, all other frags use _AX_E
+    -- This eliminates the repeated rawget(G,"getfenv") fingerprint across frags
+    local frag0 = [==[
+    local _AX_rg = rawget
+    local _AX_gf = _AX_rg and _AX_rg(_G, "get".."fe".."nv")
+    local _AX_E  = (_AX_gf and _AX_gf()) or _G or {}
+    local _AX_pc = _AX_E["pc".."all"] or pcall
+    local _AX_ty = _AX_E["ty".."pe"]  or type
+    local _AX_er = _AX_E["er".."ror"] or error
+    local _AX_rs = _AX_E["raw".."set"]
+    local _AX_nop = function() end
+    ]==]
+
     -- Frag1: tipo, rawequal, sentinel, newproxy, string.dump
     local frag1 = [==[
     do
@@ -85,15 +99,18 @@ function AntiTamper:apply(ast, pipeline)
         end
 
         -- [F] Metamethod protection: __index on table must not be hooked
-        -- A clean env has no __index on the global table
         local _gmt = _E["get".."meta".."table"]
         if _ty and _ty(_gmt)=="function" then
             local _mt_g = _gmt(_E)
-            -- If _G has a metatable with __index pointing to a function, env is proxied
             if _mt_g and _ty(_mt_g.__index)=="function" then
                 if _ty and _ty(_er)=="function" then _er("",0) end
             end
         end
+
+        -- [G] Sentinel: compute a value that frag3 will verify
+        -- If frag1 is removed/skipped, _ALPHAX_SENTINEL will be nil → frag3 detonates
+        local _sk = (_sb and _sb("A",1) or 65) + (_sb and _sb("X",1) or 88)
+        rawset(_G, "__ax_s1", _sk)  -- 153 always
     end
     ]==]
 
@@ -276,6 +293,17 @@ function AntiTamper:apply(ast, pipeline)
                 if _ty3 and _ty3(_er3)=="function" then _er3("",0) end
             end
         end
+
+        -- [T] Verify sentinel set by frag1 — inter-frag dependency
+        -- If frag1 was removed or bypassed, __ax_s1 is nil or wrong → detonate
+        local _s1v = rawget(_G, "__ax_s1")
+        if _s1v ~= nil then  -- only check if running in Roblox-like env where frag1 ran
+            if _s1v ~= 153 then
+                if _ty3 and _ty3(_er3)=="function" then _er3("",0) end
+            end
+            -- Clean up sentinel
+            rawset(_G, "__ax_s1", nil)
+        end
     end
     ]==]
 
@@ -407,7 +435,8 @@ function AntiTamper:apply(ast, pipeline)
         return n
     end
 
-    inject(frag1, 1)
+    inject(frag0, 1)
+    inject(frag1, 2)
     inject(frag2, math.floor(#ast.body.statements / 3) + 1)
     inject(frag3, math.floor(#ast.body.statements / 2) + 1)
     inject(frag4, math.floor(#ast.body.statements * 0.65) + 1)

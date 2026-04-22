@@ -123,6 +123,8 @@ function Compiler:compile(ast)
     -- Técnica 3: instruction pointer XOR mask (scrambles pos value in storage)
     self.iMask  = math.random(1, 65535);
     self.uvKey  = math.random(1, 250);
+    -- Multiplicative UV slot scrambler: slotIdx = id * uvMul + uvKey
+    self.uvMul  = math.random(1, 15) * 2 + 1;  -- odd for invertibility
     -- Second VM layer: multiplicative key for block ID scrambling
     -- Must be odd to be invertible mod 2^24
     self.vmKeyM  = math.random(1, 8000) * 2 + 1;
@@ -1028,11 +1030,10 @@ end
 function Compiler:setUpvalueMember(scope, idExpr, valExpr, compoundConstructor)
     scope:addReferenceToHigherScope(self.scope, self.upvaluesTable);
     -- Luraph-style: scramble the slot index at compile time (zero runtime cost)
-    -- Instead of upval[id], store at upval[id + uvKey]
-    -- idExpr is usually a NumberExpression or IndexExpression
+    -- Multiplicative scramble: upval[id * uvMul + uvKey]
     local scrambledIdx;
     if idExpr.kind == "NumberExpression" then
-        scrambledIdx = Ast.NumberExpression(idExpr.value + (self.uvKey or 0));
+        scrambledIdx = Ast.NumberExpression(idExpr.value * (self.uvMul or 1) + (self.uvKey or 0));
     else
         scrambledIdx = idExpr;
     end
@@ -1044,10 +1045,10 @@ end
 
 function Compiler:getUpvalueMember(scope, idExpr)
     scope:addReferenceToHigherScope(self.scope, self.upvaluesTable);
-    -- Same offset as setUpvalueMember: read from id + uvKey
+    -- Same multiplicative scramble as setUpvalueMember
     local scrambledIdx;
     if idExpr.kind == "NumberExpression" then
-        scrambledIdx = Ast.NumberExpression(idExpr.value + (self.uvKey or 0));
+        scrambledIdx = Ast.NumberExpression(idExpr.value * (self.uvMul or 1) + (self.uvKey or 0));
     else
         scrambledIdx = idExpr;
     end
