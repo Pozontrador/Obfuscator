@@ -288,75 +288,16 @@ function PackBytecode:apply(ast)
         table.insert(ast.body.statements, i, s)
     end
 
-    -- Mutation table: for some IDs, add a per-build delta
-    -- _ids[idx] = real_id + delta; access = _ids[idx] - delta
-    local vDelta = rootScope:addVariable()
-    local mutDelta = math.random(100, 9999)
-    -- _delta = mutDelta (split)
-    local dk = math.random(1, 100)
-    table.insert(ast.body.statements, #ast.body.statements + 1,
-        Ast.LocalVariableDeclaration(rootScope, {vDelta}, {
-            Ast.AddExpression(Ast.NumberExpression(mutDelta - dk), Ast.NumberExpression(dk))
-        })
-    )
-
-    -- Substitui cada block ID por _ids[index] or (_ids[index] - _delta)
+    -- Substitui cada block ID por _ids[index]
     for _, t in ipairs(targets) do
         local idx = idIndex[t.id]
         if idx then
-            -- Randomly mutate: store id+delta in table, subtract at access
-            local mutate = math.random() < 0.4
-            if mutate then
-                -- Update encoded bytes for this ID to include delta
-                local base = (idx-1)*4
-                local mutId = t.id + mutDelta
-                -- Re-encode mutated id
-                local b0m = (mutId % 256 + xorKey) % 256
-                local b1m = (math.floor(mutId/256) % 256 + xorKey+1) % 256
-                local b2m = (math.floor(mutId/65536) % 256 + xorKey+2) % 256
-                local b3m = (math.floor(mutId/16777216) % 256 + xorKey+3) % 256
-                bytes[base+1] = b0m
-                bytes[base+2] = b1m
-                bytes[base+3] = b2m
-                bytes[base+4] = b3m
-                -- Access: _ids[idx] - _delta
-                local idxExpr = Ast.SubExpression(
-                    Ast.IndexExpression(
-                        Ast.VariableExpression(rootScope, vIds),
-                        Ast.NumberExpression(idx)
-                    ),
-                    Ast.VariableExpression(rootScope, vDelta)
-                )
-                t.rhs.kind  = AstKind.SubExpression
-                t.rhs.lhs   = Ast.IndexExpression(Ast.VariableExpression(rootScope, vIds), Ast.NumberExpression(idx))
-                t.rhs.rhs   = Ast.VariableExpression(rootScope, vDelta)
-                t.rhs.value = nil; t.rhs.args = nil
-                t.rhs.base  = nil; t.rhs.index = nil
-            else
-                t.rhs.kind  = AstKind.IndexExpression
-                t.rhs.base  = Ast.VariableExpression(rootScope, vIds)
-                t.rhs.index = Ast.NumberExpression(idx)
-                t.rhs.value = nil; t.rhs.args = nil
-            end
+            t.rhs.kind  = AstKind.IndexExpression
+            t.rhs.base  = Ast.VariableExpression(rootScope, vIds)
+            t.rhs.index = Ast.NumberExpression(idx)
+            t.rhs.value = nil; t.rhs.args = nil
         end
     end
-
-    -- Re-pack the string with potentially mutated bytes
-    local strParts2 = {}
-    for _, b in ipairs(bytes) do strParts2[#strParts2+1] = string.format("\%d", b) end
-    local packedStr2 = table.concat(strParts2)
-    -- Update the packed string declaration
-    for _, s in ipairs(ast.body.statements) do
-        if s.kind == AstKind.LocalVariableDeclaration then
-            for _, init in ipairs(s.inits or {}) do
-                if init.kind == AstKind.StringExpression and init.value == packedStr then
-                    init.value = packedStr2
-                    break
-                end
-            end
-        end
-    end
-
     return ast
 end
 

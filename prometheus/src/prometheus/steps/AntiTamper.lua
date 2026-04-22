@@ -10,18 +10,6 @@ function AntiTamper:init(settings) end
 function AntiTamper:apply(ast, pipeline)
 
 
-    -- Frag0: shared bootstrap — resolves env ONCE, all other frags use _AX_E
-    -- This eliminates the repeated rawget(G,"getfenv") fingerprint across frags
-    local frag0 = [==[
-    local _AX_rg = rawget
-    local _AX_gf = _AX_rg and _AX_rg(_G, "get".."fe".."nv")
-    local _AX_E  = (_AX_gf and _AX_gf()) or _G or {}
-    local _AX_pc = _AX_E["pc".."all"] or pcall
-    local _AX_ty = _AX_E["ty".."pe"]  or type
-    local _AX_er = _AX_E["er".."ror"] or error
-    local _AX_rs = _AX_E["raw".."set"]
-    local _AX_nop = function() end
-    ]==]
 
     -- Frag1: tipo, rawequal, sentinel, newproxy, string.dump
     local frag1 = [==[
@@ -435,8 +423,7 @@ function AntiTamper:apply(ast, pipeline)
         return n
     end
 
-    inject(frag0, 1)
-    inject(frag1, 2)
+    inject(frag1, 1)
     inject(frag2, math.floor(#ast.body.statements / 3) + 1)
     inject(frag3, math.floor(#ast.body.statements / 2) + 1)
     inject(frag4, math.floor(#ast.body.statements * 0.65) + 1)
